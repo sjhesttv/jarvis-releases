@@ -1,0 +1,12 @@
+#cloud-config
+# Paste this into DigitalOcean's "Create Droplet → Advanced options → Add
+# initialization scripts (user data)". It contains NO secrets, and must never
+# contain any: DigitalOcean serves user-data to anything on the droplet that
+# can reach the metadata service.
+#
+# When the droplet is up (about 5 minutes), SSH in and run:  sudo jarvis-setup
+#
+# Progress is logged to /var/log/jarvis-install.log.
+package_update: true
+runcmd:
+  - [bash, -c, "curl -fsSL https://raw.githubusercontent.com/sjhesttv/jarvis-releases/main/install.sh -o /root/jarvis-install.sh && bash /root/jarvis-install.sh > /var/log/jarvis-install.log 2>&1"]
