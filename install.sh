@@ -89,6 +89,8 @@ say "Service user"
 if ! id jarvis >/dev/null 2>&1; then
   useradd --system --home-dir "$STATE" --create-home --shell /usr/sbin/nologin jarvis
 fi
+# Lets JARVIS read its own service log (the server_logs tool).
+usermod -aG systemd-journal jarvis
 install -d -m 0750 -o jarvis -g jarvis "$STATE"
 install -d -m 0700 -o jarvis -g jarvis "$STATE/data" "$STATE/projects"
 install -d -m 0750 -o root -g jarvis "$CONF"
