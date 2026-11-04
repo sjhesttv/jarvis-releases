@@ -3,7 +3,8 @@
 #
 # Installs everything a cloud JARVIS needs and leaves the service OFF until
 # `sudo jarvis-setup` has asked you for the few things only you know (a
-# password, the Fish Audio key, the Claude login). Nothing secret is passed
+# password and the Claude login; a Fish Audio key only if you want Fish's
+# voice instead of the local one). Nothing secret is passed
 # to this script, and nothing secret should ever be put in a droplet's
 # user-data: DigitalOcean serves user-data to anything on the droplet that
 # can reach 169.254.169.254.
@@ -12,6 +13,7 @@
 #   bash install.sh                               # latest public release
 #   bash install.sh --release-url URL             # a specific tarball
 #   bash install.sh --from-dir /path/to/checkout  # a local tree (testing)
+#   bash install.sh --no-local-models             # skip the local voice (small droplets)
 #
 # Idempotent: re-running it upgrades the system packages and reinstalls the
 # release, and never touches /etc/jarvis or /var/lib/jarvis.
@@ -22,6 +24,7 @@ set -euo pipefail
 DEFAULT_RELEASE_BASE="${JARVIS_RELEASE_BASE:-https://raw.githubusercontent.com/sjhesttv/jarvis-releases/main/latest}"
 RELEASE_URL="${DEFAULT_RELEASE_BASE}/jarvis.tar.gz"
 FROM_DIR=""
+LOCAL_MODELS="${JARVIS_LOCAL_MODELS:-1}"
 # Claude Code: pinned, and updated only by `jarvis-update`, never by itself.
 CLAUDE_CODE_VERSION="${JARVIS_CLAUDE_CODE_VERSION:-latest}"
 
@@ -29,6 +32,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --release-url) RELEASE_URL="$2"; shift 2 ;;
     --from-dir)    FROM_DIR="$2"; shift 2 ;;
+    --no-local-models) LOCAL_MODELS=0; shift ;;
     --claude-code-version) CLAUDE_CODE_VERSION="$2"; shift 2 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -125,6 +129,31 @@ python3 -m venv "$PREFIX/venv"
 "$PREFIX/venv/bin/pip" install -q --upgrade pip
 "$PREFIX/venv/bin/pip" install -q --require-hashes -r "$DEST/deploy/requirements.lock"
 
+if [[ "$LOCAL_MODELS" == "1" ]]; then
+  say "Local models: voice (Kokoro), listening (Whisper), memory search"
+  # Their own user and their own virtualenv (ml_service.py says why).
+  id jarvis-ml >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin jarvis-ml
+  python3 -m venv "$PREFIX/ml-venv"
+  "$PREFIX/ml-venv/bin/pip" install -q --upgrade pip
+  "$PREFIX/ml-venv/bin/pip" install -q --require-hashes -r "$DEST/deploy/requirements-ml.lock"
+  # Listening model by memory: small.en wants ~1 GB of RAM to itself.
+  MEM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+  if [[ ! -f "$CONF/ml.env" ]]; then
+    if [[ "$MEM_MB" -lt 3500 ]]; then STT=base.en; else STT=small.en; fi
+    printf 'JARVIS_STT_MODEL=%s\n' "$STT" > "$CONF/ml.env"
+    chmod 0644 "$CONF/ml.env"
+  fi
+  install -m 0755 "$DEST/deploy/jarvis-models" /usr/local/sbin/jarvis-models
+  set -a; . "$CONF/ml.env"; set +a
+  if ! /usr/local/sbin/jarvis-models; then
+    echo "Some models did not download; JARVIS works without them (Fish voice, keyword memory search)." >&2
+    echo "Try again later with: sudo jarvis-models && sudo systemctl restart jarvis-ml" >&2
+  fi
+  if [[ "$MEM_MB" -lt 3500 ]]; then
+    echo "Note: this droplet has ${MEM_MB} MB of memory. The local voice is happiest with 8 GB (4 vCPU)." >&2
+  fi
+fi
+
 say "Headless Chromium (read_page / look_at_page)"
 export PLAYWRIGHT_BROWSERS_PATH="$PREFIX/ms-playwright"
 "$PREFIX/venv/bin/python" -m playwright install --with-deps chromium >/dev/null
@@ -153,10 +182,18 @@ install -m 0755 "$DEST/deploy/jarvis-update"   /usr/local/sbin/jarvis-update
 install -m 0755 "$DEST/deploy/jarvis-firewall" /usr/local/sbin/jarvis-firewall
 install -m 0644 "$DEST/deploy/systemd/jarvis.service"        /etc/systemd/system/jarvis.service
 install -m 0644 "$DEST/deploy/systemd/jarvis-egress.service" /etc/systemd/system/jarvis-egress.service
+if [[ "$LOCAL_MODELS" == "1" ]]; then
+  install -m 0644 "$DEST/deploy/systemd/jarvis-ml.service" /etc/systemd/system/jarvis-ml.service
+fi
 install -m 0755 "$DEST/deploy/profile.d/jarvis.sh" /etc/profile.d/jarvis.sh
 systemctl daemon-reload
 systemctl enable jarvis-egress.service >/dev/null 2>&1
 systemctl start jarvis-egress.service
+if [[ "$LOCAL_MODELS" == "1" ]]; then
+  # Harmless before setup: loopback only, no network, nothing secret.
+  systemctl enable jarvis-ml.service >/dev/null 2>&1
+  systemctl restart jarvis-ml.service
+fi
 
 say "Firewall: SSH, HTTP, HTTPS only"
 ufw allow OpenSSH >/dev/null
@@ -176,8 +213,9 @@ else
 
        sudo jarvis-setup
 
-   It asks for a password, your Fish Audio key and your Claude
-   login, then starts everything and prints the address to open.
+   It asks for a password and your Claude login (and, if you
+   want it, a Fish Audio key), then starts everything and
+   prints the address to open.
   ─────────────────────────────────────────────────────────────
 EOF
 fi
