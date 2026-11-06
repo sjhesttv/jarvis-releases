@@ -10,6 +10,7 @@ edit by hand.
 | `cloud-init.yaml` | Paste into DigitalOcean's "user data" when creating a droplet |
 | `latest/jarvis.tar.gz` | The current release (`latest/VERSION`), checked against `latest/jarvis.tar.gz.sha256` |
 | `releases/<tag>/` | Every published version |
+| `docs/mac-install.md` | Installing JARVIS on a Mac instead (from the private source; written by hand, not by the release workflow) |
 
 ## Install
 
